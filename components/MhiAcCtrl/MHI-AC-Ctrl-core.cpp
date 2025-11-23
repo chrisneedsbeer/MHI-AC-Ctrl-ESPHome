@@ -255,8 +255,8 @@ static byte MOSI_frame[33];
     for (uint8_t bit_cnt = 0; bit_cnt < 8; bit_cnt++) { // read and write 1 byte
       SCKMillis = millis();
       while (digitalRead(SCK_PIN)) { // wait for falling edge
-        if (millis() - startMillis > max_time_ms)
-          ESP_LOGW(TAG_CORE, "Timeout SCK high in bit loop at byte %u, bit %u, SCK=%d",
+        if (millis() - startMillis > max_time_ms) {
+          ESP_LOGD(TAG_CORE, "Timeout SCK high in bit loop at byte %u, bit %u, SCK=%d",
                byte_cnt, bit_cnt, (int)digitalRead(SCK_PIN));
           return err_msg_timeout_SCK_high;       // SCK stuck@ high error detection
       } 
