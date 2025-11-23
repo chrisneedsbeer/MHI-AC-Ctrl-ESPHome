@@ -2,6 +2,9 @@
 // implements the core functions (read & write SPI)
 
 #include "MHI-AC-Ctrl-core.h"
+#include "esphome/core/log.h"
+static const char *TAG_CORE = "mhi.core";
+
 
 uint16_t calc_checksum(byte* frame) {
   uint16_t checksum = 0;
@@ -236,46 +239,87 @@ static byte MOSI_frame[33];
   //Serial.println();
   //Serial.print(F("MISO:"));
   // read/write MOSI/MISO frame
-// read/write MOSI/MISO frame
-for (uint8_t byte_cnt = 0; byte_cnt < frameSize; byte_cnt++) { // read and write a data packet of 20 bytes
-  MOSI_byte = 0;
-  byte bit_mask = 1;
-  for (uint8_t bit_cnt = 0; bit_cnt < 8; bit_cnt++) { // read and write 1 byte
-    SCKMillis = millis();
-    while (digitalRead(SCK_PIN)) { // wait for falling edge
-      if (millis() - startMillis > max_time_ms)
-        return err_msg_timeout_SCK_high;       // SCK stuck@ high error detection
-    } 
-    if ((MISO_frame[byte_cnt] & bit_mask) > 0)
-      digitalWrite(MISO_PIN, 1);
-    else
-      digitalWrite(MISO_PIN, 0);
-    while (!digitalRead(SCK_PIN)) {} // wait for rising edge
-    if (digitalRead(MOSI_PIN))
-      MOSI_byte += bit_mask;
-    bit_mask = bit_mask << 1;
+  for (uint8_t byte_cnt = 0; byte_cnt < frameSize; byte_cnt++) { // read and write a data packet of 20 bytes
+    //Serial.printf("x%02x ", MISO_frame[byte_cnt]);
+    MOSI_byte = 0;
+    byte bit_mask = 1;
+    for (uint8_t bit_cnt = 0; bit_cnt < 8; bit_cnt++) { // read and write 1 byte
+      SCKMillis = millis();
+      while (digitalRead(SCK_PIN)) { // wait for falling edge
+        if (millis() - startMillis > max_time_ms)
+          return err_msg_timeout_SCK_high;       // SCK stuck@ high error detection
+      } 
+      if ((MISO_frame[byte_cnt] & bit_mask) > 0)
+        digitalWrite(MISO_PIN, 1);
+      else
+        digitalWrite(MISO_PIN, 0);
+      while (!digitalRead(SCK_PIN)) {} // wait for rising edge
+      if (digitalRead(MOSI_PIN))
+        MOSI_byte += bit_mask;
+      bit_mask = bit_mask << 1;
+    }
+    if (MOSI_frame[byte_cnt] != MOSI_byte) {
+      new_datapacket_received = true;
+      MOSI_frame[byte_cnt] = MOSI_byte;
+    }
   }
-  if (MOSI_frame[byte_cnt] != MOSI_byte) {
-    new_datapacket_received = true;
-    MOSI_frame[byte_cnt] = MOSI_byte;
+
+
+checksum = calc_checksum(MOSI_frame);
+if (((MOSI_frame[SB0] & 0xfe) != 0x6c) | (MOSI_frame[SB1] != 0x80) | (MOSI_frame[SB2] != 0x04)) {
+  ESP_LOGW(TAG_CORE,
+           "Invalid signature: SB0=0x%02X SB1=0x%02X SB2=0x%02X (expected 6C/6D,80,04)",
+           MOSI_frame[SB0], MOSI_frame[SB1], MOSI_frame[SB2]);
+  return err_msg_invalid_signature;
+}
+
+if ((MOSI_frame[CBH] << 8 | MOSI_frame[CBL]) != checksum) {
+  ESP_LOGW(TAG_CORE,
+           "Invalid checksum: cbh=0x%02X cbl=0x%02X calc=0x%04X",
+           MOSI_frame[CBH], MOSI_frame[CBL], checksum);
+  return err_msg_invalid_checksum;
+}
+
+
+if (frameSize == 33) { // Only for framesize 33 (WF-RAC)
+  checksum = calc_checksumFrame33(MOSI_frame);
+  uint8_t expected = lowByte(checksum);
+  uint8_t received = MOSI_frame[CBL2];
+
+  if (received != expected) {
+    ESP_LOGW(TAG_CORE,
+             "Invalid Frame33 checksum: CBL2=0x%02X expected=0x%02X (frameSize=33)",
+             received, expected);
+
+    // Optional: dump last bytes for debugging
+    ESP_LOGD(TAG_CORE,
+             "Frame33 tail bytes: ... DB31=0x%02X DB32=0x%02X CBL2=0x%02X",
+             MOSI_frame[31], MOSI_frame[32], MOSI_frame[CBL2]);
+
+    return err_msg_invalid_checksum;
   }
 }
 
 
-  checksum = calc_checksum(MOSI_frame);
-  if (((MOSI_frame[SB0] & 0xfe) != 0x6c) | (MOSI_frame[SB1] != 0x80) | (MOSI_frame[SB2] != 0x04))
-    return err_msg_invalid_signature;
-  if ((MOSI_frame[CBH] << 8 | MOSI_frame[CBL]) != checksum)
-    return err_msg_invalid_checksum;
-
-  if (frameSize == 33) { // Only for framesize 33 (WF-RAC)
-    checksum = calc_checksumFrame33(MOSI_frame);
-    if ( MOSI_frame[CBL2] != lowByte(checksum ) ) 
-      return err_msg_invalid_checksum;
-  }
-
   if (new_datapacket_received) {
+    // Dump the first part of the frame so we can see raw data
+    ESP_LOGD(TAG_CORE,
+            "New frame: SB0=%02X SB1=%02X SB2=%02X DB0=%02X DB1=%02X DB2=%02X DB3=%02X DB4=%02X DB5=%02X",
+            MOSI_frame[SB0], MOSI_frame[SB1], MOSI_frame[SB2],
+            MOSI_frame[DB0], MOSI_frame[DB1], MOSI_frame[DB2],
+            MOSI_frame[DB3], MOSI_frame[DB4], MOSI_frame[DB5]);
 
+    // If you want the whole 20 or 33 bytes:
+    /*
+    char buf[4];
+    char line[128];
+    line[0] = 0;
+    for (uint8_t i = 0; i < frameSize; i++) {
+      snprintf(buf, sizeof(buf), "%02X ", MOSI_frame[i]);
+      strncat(line, buf, sizeof(line)-strlen(line)-1);
+    }
+    ESP_LOGD(TAG_CORE, "MOSI frame: %s", line);
+    */
     if (frameSize == 33) { // Only for framesize 33 (WF-RAC)
       byte vanesLRtmp = (MOSI_frame[DB16] & 0x07) + ((MOSI_frame[DB17] & 0x01) << 4);
       if (vanesLRtmp != status_vanesLR_old) { // Vanes Left Right

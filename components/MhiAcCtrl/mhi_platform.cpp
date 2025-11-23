@@ -10,7 +10,7 @@ static const char* TAG = "mhi.platform";
 
 
 void MhiPlatform::setup() {
-    
+    ESP_LOGI("mhi.platform", "MHI platform init, Markovic Automation custom build, timeout patched");
     if (this->sck_pin_ >= 0) { //
       SCK_PIN = this->sck_pin_;
     }
