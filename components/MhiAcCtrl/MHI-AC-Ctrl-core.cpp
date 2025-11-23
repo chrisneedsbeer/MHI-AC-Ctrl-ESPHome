@@ -233,33 +233,50 @@ static byte MOSI_frame[33];
     checksum = calc_checksumFrame33(MISO_frame);
     MISO_frame[CBL2] = lowByte(checksum);
   }
-  Serial.println(); // Debugging output
-  Serial.print(F("MISO:")); // Debugging output
+  //Serial.println();
+  //Serial.print(F("MISO:"));
   // read/write MOSI/MISO frame
-  for (uint8_t byte_cnt = 0; byte_cnt < frameSize; byte_cnt++) { // read and write a data packet of 20 bytes
-    Serial.printf("x%02x ", MISO_frame[byte_cnt]); //Debugging output
-    MOSI_byte = 0;
-    byte bit_mask = 1;
-    for (uint8_t bit_cnt = 0; bit_cnt < 8; bit_cnt++) { // read and write 1 byte
-      SCKMillis = millis();
-      while (digitalRead(SCK_PIN)) { // wait for falling edge
-        if (millis() - startMillis > max_time_ms)
-          return err_msg_timeout_SCK_high;       // SCK stuck@ high error detection
-      } 
-      if ((MISO_frame[byte_cnt] & bit_mask) > 0)
-        digitalWrite(MISO_PIN, 1);
-      else
-        digitalWrite(MISO_PIN, 0);
-      while (!digitalRead(SCK_PIN)) {} // wait for rising edge
-      if (digitalRead(MOSI_PIN))
-        MOSI_byte += bit_mask;
-      bit_mask = bit_mask << 1;
+for (uint8_t byte_cnt = 0; byte_cnt < frameSize; byte_cnt++) { // read and write a data packet
+  MOSI_byte = 0;
+  byte bit_mask = 1;
+
+  for (uint8_t bit_cnt = 0; bit_cnt < 8; bit_cnt++) { // read and write 1 byte
+    // Wait for falling edge on SCK, but only for max_time_ms from *this bit*
+    SCKMillis = millis();
+    while (digitalRead(SCK_PIN)) { // wait for falling edge
+      if (millis() - SCKMillis > max_time_ms) {
+        // SCK has been high too long during this bit → treat as timeout
+        return err_msg_timeout_SCK_high;       // SCK stuck@ high error detection
+      }
+      delayMicroseconds(5);  // avoid tight spin
     }
-    if (MOSI_frame[byte_cnt] != MOSI_byte) {
-      new_datapacket_received = true;
-      MOSI_frame[byte_cnt] = MOSI_byte;
+
+    // Drive MISO bit
+    if ((MISO_frame[byte_cnt] & bit_mask) > 0)
+      digitalWrite(MISO_PIN, 1);
+    else
+      digitalWrite(MISO_PIN, 0);
+
+    // Wait for rising edge on SCK, again with per-bit timeout
+    SCKMillis = millis();
+    while (!digitalRead(SCK_PIN)) { // wait for rising edge
+      if (millis() - SCKMillis > max_time_ms) {
+        return err_msg_timeout_SCK_low;       // SCK stuck@ low error detection
+      }
+      delayMicroseconds(5);
     }
+
+    if (digitalRead(MOSI_PIN))
+      MOSI_byte += bit_mask;
+    bit_mask = bit_mask << 1;
   }
+
+  if (MOSI_frame[byte_cnt] != MOSI_byte) {
+    new_datapacket_received = true;
+    MOSI_frame[byte_cnt] = MOSI_byte;
+  }
+}
+
 
   checksum = calc_checksum(MOSI_frame);
   if (((MOSI_frame[SB0] & 0xfe) != 0x6c) | (MOSI_frame[SB1] != 0x80) | (MOSI_frame[SB2] != 0x04))
