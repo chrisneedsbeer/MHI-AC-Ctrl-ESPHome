@@ -246,8 +246,10 @@ static byte MOSI_frame[33];
   //Serial.println();
   //Serial.print(F("MISO:"));
   // read/write MOSI/MISO frame
+  ESP_LOGI(TAG_CORE, "Starting SPI frame transfer");
   for (uint8_t byte_cnt = 0; byte_cnt < frameSize; byte_cnt++) { // read and write a data packet of 20 bytes
     //Serial.printf("x%02x ", MISO_frame[byte_cnt]);
+    ESP_LOGD(TAG_CORE, "Transferring byte %d: MISO=0x%02X", byte_cnt, MISO_frame[byte_cnt]);
     MOSI_byte = 0;
     byte bit_mask = 1;
     for (uint8_t bit_cnt = 0; bit_cnt < 8; bit_cnt++) { // read and write 1 byte
