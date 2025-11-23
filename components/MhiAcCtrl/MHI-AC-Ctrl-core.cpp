@@ -233,11 +233,11 @@ static byte MOSI_frame[33];
     checksum = calc_checksumFrame33(MISO_frame);
     MISO_frame[CBL2] = lowByte(checksum);
   }
-  //Serial.println();
-  //Serial.print(F("MISO:"));
+  Serial.println(); // Debugging output
+  Serial.print(F("MISO:")); // Debugging output
   // read/write MOSI/MISO frame
   for (uint8_t byte_cnt = 0; byte_cnt < frameSize; byte_cnt++) { // read and write a data packet of 20 bytes
-    //Serial.printf("x%02x ", MISO_frame[byte_cnt]);
+    Serial.printf("x%02x ", MISO_frame[byte_cnt]); //Debugging output
     MOSI_byte = 0;
     byte bit_mask = 1;
     for (uint8_t bit_cnt = 0; bit_cnt < 8; bit_cnt++) { // read and write 1 byte
