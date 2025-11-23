@@ -3,6 +3,10 @@
 
 #include "MHI-AC-Ctrl-core.h"
 #include "esphome/core/log.h"
+
+namespace esphome {
+namespace mhi {
+
 static const char *TAG_CORE = "mhi.core";
 
 
@@ -646,3 +650,5 @@ if (frameSize == 33) { // Only for framesize 33 (WF-RAC)
   }
   return call_counter;
 }
+}  // namespace mhi
+}  // namespace esphome
