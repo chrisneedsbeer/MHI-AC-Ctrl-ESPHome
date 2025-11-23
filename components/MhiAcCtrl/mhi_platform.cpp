@@ -1,11 +1,11 @@
 #include "mhi_platform.h"
 
+namespace esphome {
+namespace mhi {
+        
 int SCK_PIN = 14;
 int MOSI_PIN = 13;
 int MISO_PIN = 12;
-namespace esphome {
-namespace mhi {
-
 static const char* TAG = "mhi.platform";
 
 
