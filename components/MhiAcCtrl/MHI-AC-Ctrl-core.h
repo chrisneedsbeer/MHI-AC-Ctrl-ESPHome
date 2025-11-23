@@ -2,6 +2,9 @@
 
 #include <Arduino.h>
 
+namespace esphome {
+namespace mhi {
+
 // comment out the data you are not interested, but at least leave one row !
 const byte opdata[][2] PROGMEM = {
   { 0xc0, 0x02},  //  1 "MODE"
@@ -189,3 +192,6 @@ class MHI_AC_Ctrl_Core {
     void set_vanesLR(uint vanesLR);       // set the vanes vertical position
 
 };
+
+} //namespace mhi
+} //namespace esphome
