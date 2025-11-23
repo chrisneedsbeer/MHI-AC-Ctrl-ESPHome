@@ -259,6 +259,7 @@ static byte MOSI_frame[33];
           ESP_LOGD(TAG_CORE, "Timeout SCK high in bit loop at byte %u, bit %u, SCK=%d",
                byte_cnt, bit_cnt, (int)digitalRead(SCK_PIN));
           return err_msg_timeout_SCK_high;       // SCK stuck@ high error detection
+        }
       } 
       if ((MISO_frame[byte_cnt] & bit_mask) > 0)
         digitalWrite(MISO_PIN, 1);
