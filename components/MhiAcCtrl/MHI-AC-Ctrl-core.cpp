@@ -304,10 +304,10 @@ if (frameSize == 33) { // Only for framesize 33 (WF-RAC)
   if (new_datapacket_received) {
     // Dump the first part of the frame so we can see raw data
     ESP_LOGD(TAG_CORE,
-            "New frame: SB0=%02X SB1=%02X SB2=%02X DB0=%02X DB1=%02X DB2=%02X DB3=%02X DB4=%02X DB5=%02X",
+            "New frame: SB0=%02X SB1=%02X SB2=%02X DB0=%02X DB1=%02X DB2=%02X DB3=%02X DB4=%02X",
             MOSI_frame[SB0], MOSI_frame[SB1], MOSI_frame[SB2],
             MOSI_frame[DB0], MOSI_frame[DB1], MOSI_frame[DB2],
-            MOSI_frame[DB3], MOSI_frame[DB4], MOSI_frame[DB5]);
+            MOSI_frame[DB3], MOSI_frame[DB4]);
 
     // If you want the whole 20 or 33 bytes:
     /*
