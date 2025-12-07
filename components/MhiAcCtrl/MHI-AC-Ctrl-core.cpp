@@ -64,7 +64,7 @@ void MHI_AC_Ctrl_Core::init() {
   //MeasureFrequency(m_cbiStatus);
   pinMode(SCK_PIN, INPUT);
   pinMode(MOSI_PIN, INPUT);
-  pinMode(MISO_PIN, OUTPUT);
+  pinMode(MISO_PIN, INPUT); //Put on Input only for sniffer mode - to test
   ESP_LOGI(TAG_CORE, "MHI AC Ctrl Core initialized on SCK pin %d, MOSI pin %d, MISO pin %d", SCK_PIN, MOSI_PIN, MISO_PIN);
   MHI_AC_Ctrl_Core::reset_old_values();
 }
@@ -305,12 +305,12 @@ for (uint8_t byte_cnt = 0; byte_cnt < frameSize; byte_cnt++) {  // <-- OUTER LOO
       }
       delay(0);  // yield to WiFi/OTA
     }
-
-    // Drive outgoing MISO bit
-    if (MISO_frame[byte_cnt] & bit_mask)
-      digitalWrite(MISO_PIN, HIGH);
-    else
-      digitalWrite(MISO_PIN, LOW);
+    // Sniffer mode - CM
+    // // Drive outgoing MISO bit
+    // if (MISO_frame[byte_cnt] & bit_mask)
+    //   digitalWrite(MISO_PIN, HIGH);
+    // else
+    //   digitalWrite(MISO_PIN, LOW);
 
     // --- Wait for rising edge (SCK = 0 → 1) ---
     bit_start = millis();
