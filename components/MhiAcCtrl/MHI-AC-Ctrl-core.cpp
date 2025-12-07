@@ -341,7 +341,6 @@ for (uint8_t byte_cnt = 0; byte_cnt < frameSize; byte_cnt++) {  // <-- OUTER LOO
 }
 
 
-
 checksum = calc_checksum(MOSI_frame);
 if (((MOSI_frame[SB0] & 0xfe) != 0x6c) | (MOSI_frame[SB1] != 0x80) | (MOSI_frame[SB2] != 0x04)) {
   ESP_LOGW(TAG_CORE,
