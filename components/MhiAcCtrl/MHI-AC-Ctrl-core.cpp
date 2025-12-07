@@ -64,7 +64,7 @@ void MHI_AC_Ctrl_Core::init() {
   //MeasureFrequency(m_cbiStatus);
   pinMode(SCK_PIN, INPUT);
   pinMode(MOSI_PIN, INPUT);
-  pinMode(MISO_PIN, INPUT); //Put on Input only for sniffer mode - to test
+  pinMode(MISO_PIN, OUTPUT);
   ESP_LOGI(TAG_CORE, "MHI AC Ctrl Core initialized on SCK pin %d, MOSI pin %d, MISO pin %d", SCK_PIN, MOSI_PIN, MISO_PIN);
   MHI_AC_Ctrl_Core::reset_old_values();
 }
@@ -337,7 +337,7 @@ for (uint8_t byte_cnt = 0; byte_cnt < frameSize; byte_cnt++) {
   for (uint8_t bit_cnt = 0; bit_cnt < 8; bit_cnt++) {
 
     uint32_t bit_start = millis();
-    const uint32_t max_time_ms_per_bit = 3; // safe per-bit timeout
+    const uint32_t max_time_ms_per_bit = 25; // safe per-bit timeout
 
     // ----------------------------
     //       Wait FALLING EDGE
