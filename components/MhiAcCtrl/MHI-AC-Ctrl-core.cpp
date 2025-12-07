@@ -4,6 +4,23 @@
 #include "MHI-AC-Ctrl-core.h"
 #include "esphome/core/log.h"
 
+
+// ------------------------------------------------------------------
+// Logic analyzer debug (one-shot capture on first loop() call)
+// ------------------------------------------------------------------
+#define MHI_DEBUG_LA_CAPTURE_ONCE 1
+
+#if MHI_DEBUG_LA_CAPTURE_ONCE
+static const int MHI_LA_MAX_EDGES = 128;
+
+struct MhiLaEdge {
+  uint32_t dt_us;   // time since previous edge (µs)
+  uint8_t sck;      // SCK level
+  uint8_t mosi;     // MOSI level
+  uint8_t miso;     // MISO level
+};
+#endif
+
 namespace esphome {
 namespace mhi {
 
@@ -152,6 +169,77 @@ static byte MOSI_frame[33];
 
    
   call_counter++;
+
+
+  // ------------------------------------------------------------------
+  // ONE-SHOT LOGIC ANALYZER CAPTURE (for debugging SCK/MOSI/MISO)
+  // ------------------------------------------------------------------
+#if MHI_DEBUG_LA_CAPTURE_ONCE
+  {
+    static bool la_done = false;
+    static MhiLaEdge la_buf[MHI_LA_MAX_EDGES];
+    static uint8_t la_len = 0;
+
+    if (!la_done) {
+      la_done = true;  // run only once after boot
+
+      ESP_LOGI(TAG_CORE, "=== MHI LA: starting one-shot capture (up to %d edges / 200ms) ===",
+               MHI_LA_MAX_EDGES);
+
+      la_len = 0;
+      uint32_t t0 = micros();
+      uint32_t last_sck = digitalRead(SCK_PIN);
+      uint32_t last_mosi = digitalRead(MOSI_PIN);
+      uint32_t last_time = t0;
+
+      // Capture edges for up to 200 ms or until buffer is full
+      while ((micros() - t0) < 200000UL && la_len < MHI_LA_MAX_EDGES) {
+        uint8_t sck = digitalRead(SCK_PIN);
+        uint8_t mosi = digitalRead(MOSI_PIN);
+
+        if (sck != last_sck || mosi != last_mosi) {
+          uint32_t now = micros();
+          MhiLaEdge &e = la_buf[la_len++];
+          e.dt_us = now - last_time;
+          e.sck = sck;
+          e.mosi = mosi;
+          e.miso = digitalRead(MISO_PIN);
+
+          last_time = now;
+          last_sck = sck;
+          last_mosi = mosi;
+        }
+
+        // small sampling delay; enough to catch CNS edges, not too busy
+        delayMicroseconds(5);
+      }
+
+      // Dump captured edges
+      ESP_LOGI(TAG_CORE, "=== MHI LA: captured %u edges ===", la_len);
+      uint32_t acc_us = 0;
+      for (uint8_t i = 0; i < la_len; i++) {
+        acc_us += la_buf[i].dt_us;
+        ESP_LOGI(TAG_CORE,
+                 "  [%02u] t=%6u us  dt=%4u  SCK=%u MOSI=%u MISO=%u",
+                 i,
+                 acc_us,
+                 la_buf[i].dt_us,
+                 la_buf[i].sck,
+                 la_buf[i].mosi,
+                 la_buf[i].miso);
+      }
+      ESP_LOGI(TAG_CORE, "=== MHI LA: capture done, continuing normal loop() ===");
+    }
+  }
+#endif
+  // ------------------------------------------------------------------
+  // end of logic analyzer block
+  // ---------------------------
+
+
+
+
+
   int SCKMillis = millis();               // time of last SCK low level
   while (millis() - SCKMillis < 5) {      // wait for 5ms stable high signal to detect a frame start
     if (!digitalRead(SCK_PIN))
