@@ -291,7 +291,7 @@ for (uint8_t byte_cnt = 0; byte_cnt < frameSize; byte_cnt++) {  // <-- OUTER LOO
   for (uint8_t bit_cnt = 0; bit_cnt < 8; bit_cnt++) {
 
     uint32_t bit_start = millis();
-    const uint32_t max_time_ms_per_bit = 3;   // tweak 2–5ms if needed
+    const uint32_t max_time_ms_per_bit = 20;   // tweak 2–5ms if needed
 
     // --- Wait for falling edge (SCK = 1 → 0) ---
     ESP_LOGV(TAG_CORE, "    Waiting FE: byte=%u bit=%u", byte_cnt, bit_cnt);
