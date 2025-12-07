@@ -277,123 +277,80 @@ static byte MOSI_frame[33];
   // }
 
 // read/write MOSI/MISO frame
+// --- read/write MOSI/MISO frame -----------------------------------
 ESP_LOGI(TAG_CORE, "Starting SPI frame transfer");
 
-// ===============================
-//  FRAME START DETECTION
-// ===============================
-//
-// MHI protocol: SCK idles HIGH for a long time.
-// A valid frame begins with:
-//   1) SCK HIGH ≥ 5 ms (true idle)
-//   2) FIRST falling edge → start of byte 0, bit 0
-//
-
-uint32_t start_wait = millis();
-
-// --- Wait for SCK to be HIGH (idle) ---
-while (digitalRead(SCK_PIN) == LOW) {
-  if (millis() - start_wait > max_time_ms) {
-    ESP_LOGW(TAG_CORE, "Timeout waiting for SCK idle HIGH");
-    return err_msg_timeout_SCK_low;
-  }
-}
-
-// --- Require SCK HIGH for at least 5ms ---
-uint32_t high_start = millis();
-while (millis() - high_start < 5) {
-  if (digitalRead(SCK_PIN) == LOW) {
-    // Restart measurement if SCK drops early (noise)
-    high_start = millis();
-  }
-  delayMicroseconds(50);
-}
-
-ESP_LOGV(TAG_CORE, "SCK stable HIGH detected — awaiting real frame start");
-
-// --- Now wait for true START OF FRAME (first falling edge) ---
-while (digitalRead(SCK_PIN) == HIGH) {
-  // waiting for falling edge
-  if (millis() - high_start > max_time_ms) {
-    ESP_LOGW(TAG_CORE, "Timeout waiting for frame-start falling edge");
-    return err_msg_timeout_SCK_high;
-  }
-}
-
-ESP_LOGV(TAG_CORE, "Frame start detected (first FE)");
-
-// =====================================================
-//     MAIN BYTE LOOP — NOW SAFE TO RECEIVE A FRAME
-// =====================================================
-
+// OUTER: loop over bytes
 for (uint8_t byte_cnt = 0; byte_cnt < frameSize; byte_cnt++) {
-
   ESP_LOGD(TAG_CORE, "Transferring byte %u: MISO=0x%02X",
            byte_cnt, MISO_frame[byte_cnt]);
 
   MOSI_byte = 0;
   uint8_t bit_mask = 1;
 
+  // INNER: loop over 8 bits per byte
   for (uint8_t bit_cnt = 0; bit_cnt < 8; bit_cnt++) {
 
     uint32_t bit_start = millis();
-    const uint32_t max_time_ms_per_bit = 25; // safe per-bit timeout
+    const uint32_t max_time_ms_per_bit = 25;   // relaxed per-bit timeout
 
-    // ----------------------------
-    //       Wait FALLING EDGE
-    // ----------------------------
+    // --- Wait for falling edge (SCK = 1 → 0) ---
     ESP_LOGV(TAG_CORE, "    Waiting FE: byte=%u bit=%u", byte_cnt, bit_cnt);
 
-    while (digitalRead(SCK_PIN) == HIGH) {
+    uint32_t t0 = micros();
+    while (digitalRead(SCK_PIN)) {
       if (millis() - bit_start > max_time_ms_per_bit) {
         ESP_LOGW(TAG_CORE,
-            "Timeout SCK HIGH per-bit: byte=%u bit=%u SCK=%d",
-            byte_cnt, bit_cnt, (int)digitalRead(SCK_PIN));
+                 "Timeout SCK HIGH per-bit: byte=%u bit=%u SCK=%d",
+                 byte_cnt, bit_cnt, (int)digitalRead(SCK_PIN));
         return err_msg_timeout_SCK_high;
       }
-      delayMicroseconds(10);
+      delay(0);  // yield to WiFi/OTA – prevents lockups
     }
+    uint32_t t_fe = micros();
+    ESP_LOGV(TAG_CORE,
+             "FE dt=%u us (byte=%u bit=%u)",
+             (unsigned)(t_fe - t0), byte_cnt, bit_cnt);
 
-    // -----------------------------------------
-    // Drive outgoing MISO bit (if enabled)
-    // -----------------------------------------
-    // IMPORTANT: remove drive during bring-up
-    if (digitalRead(MISO_PIN) != INPUT) {
-      if (MISO_frame[byte_cnt] & bit_mask)
-        digitalWrite(MISO_PIN, HIGH);
-      else
-        digitalWrite(MISO_PIN, LOW);
-    }
+    // Drive outgoing MISO bit
+    if (MISO_frame[byte_cnt] & bit_mask)
+      digitalWrite(MISO_PIN, HIGH);
+    else
+      digitalWrite(MISO_PIN, LOW);
 
-    // ----------------------------
-    //       Wait RISING EDGE
-    // ----------------------------
+    // --- Wait for rising edge (SCK = 0 → 1) ---
     bit_start = millis();
     ESP_LOGV(TAG_CORE, "    Waiting RE: byte=%u bit=%u", byte_cnt, bit_cnt);
 
-    while (digitalRead(SCK_PIN) == LOW) {
+    t0 = micros();
+    while (!digitalRead(SCK_PIN)) {
       if (millis() - bit_start > max_time_ms_per_bit) {
         ESP_LOGW(TAG_CORE,
-            "Timeout SCK LOW per-bit: byte=%u bit=%u SCK=%d",
-            byte_cnt, bit_cnt, (int)digitalRead(SCK_PIN));
+                 "Timeout SCK LOW per-bit: byte=%u bit=%u SCK=%d",
+                 byte_cnt, bit_cnt, (int)digitalRead(SCK_PIN));
         return err_msg_timeout_SCK_low;
       }
-      delayMicroseconds(10);
+      delay(0);  // yield
     }
+    uint32_t t_re = micros();
+    ESP_LOGV(TAG_CORE,
+             "RE dt=%u us (byte=%u bit=%u)",
+             (unsigned)(t_re - t0), byte_cnt, bit_cnt);
 
-    // read incoming MOSI bit
+    // Read MOSI bit
     if (digitalRead(MOSI_PIN))
       MOSI_byte |= bit_mask;
 
     bit_mask <<= 1;
   }
 
-  // Track changes
+  // If this byte changed, mark the frame as “new data”
   if (MOSI_frame[byte_cnt] != MOSI_byte) {
     new_datapacket_received = true;
     MOSI_frame[byte_cnt] = MOSI_byte;
   }
 }
+
 
 
 checksum = calc_checksum(MOSI_frame);
