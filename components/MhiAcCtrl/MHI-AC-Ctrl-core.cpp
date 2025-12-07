@@ -171,46 +171,49 @@ static byte MOSI_frame[33];
   call_counter++;
 
 
-  // ------------------------------------------------------------------
-  // ONE-SHOT LOGIC ANALYZER CAPTURE (for debugging SCK/MOSI/MISO)
-  // ------------------------------------------------------------------
+ // ------------------------------------------------------------------
+// ONE-SHOT LOGIC ANALYZER CAPTURE (for debugging SCK/MOSI/MISO)
+//  - Delayed so logger/API is already connected
+// ------------------------------------------------------------------
 #if MHI_DEBUG_LA_CAPTURE_ONCE
   {
     static bool la_done = false;
     static MhiLaEdge la_buf[MHI_LA_MAX_EDGES];
     static uint8_t la_len = 0;
 
-    if (!la_done) {
-      la_done = true;  // run only once after boot
+    // Only capture once, and only after ~10 seconds uptime
+    if (!la_done && millis() > 10000UL) {
+      la_done = true;  // run only once per boot
 
-      ESP_LOGI(TAG_CORE, "=== MHI LA: starting one-shot capture (up to %d edges / 200ms) ===",
+      ESP_LOGI(TAG_CORE,
+               "=== MHI LA: starting one-shot capture (up to %d edges / 200ms) ===",
                MHI_LA_MAX_EDGES);
 
       la_len = 0;
       uint32_t t0 = micros();
-      uint32_t last_sck = digitalRead(SCK_PIN);
+      uint32_t last_sck  = digitalRead(SCK_PIN);
       uint32_t last_mosi = digitalRead(MOSI_PIN);
       uint32_t last_time = t0;
 
       // Capture edges for up to 200 ms or until buffer is full
       while ((micros() - t0) < 200000UL && la_len < MHI_LA_MAX_EDGES) {
-        uint8_t sck = digitalRead(SCK_PIN);
+        uint8_t sck  = digitalRead(SCK_PIN);
         uint8_t mosi = digitalRead(MOSI_PIN);
 
         if (sck != last_sck || mosi != last_mosi) {
           uint32_t now = micros();
           MhiLaEdge &e = la_buf[la_len++];
           e.dt_us = now - last_time;
-          e.sck = sck;
-          e.mosi = mosi;
-          e.miso = digitalRead(MISO_PIN);
+          e.sck   = sck;
+          e.mosi  = mosi;
+          e.miso  = digitalRead(MISO_PIN);
 
           last_time = now;
-          last_sck = sck;
+          last_sck  = sck;
           last_mosi = mosi;
         }
 
-        // small sampling delay; enough to catch CNS edges, not too busy
+        // Small delay: enough resolution for CNS bus, avoids busy-wait
         delayMicroseconds(5);
       }
 
@@ -232,9 +235,10 @@ static byte MOSI_frame[33];
     }
   }
 #endif
-  // ------------------------------------------------------------------
-  // end of logic analyzer block
-  // ---------------------------
+// ------------------------------------------------------------------
+// end of logic analyzer block
+// ------------------------------------------------------------------
+
 
 
 
