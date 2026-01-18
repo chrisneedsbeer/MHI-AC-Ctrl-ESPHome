@@ -122,6 +122,7 @@ static inline bool wait_falling_edge(int sck_pin, uint32_t timeout_us) {
   // Expect current high, wait for low.
   return wait_level(sck_pin, 0, timeout_us);
 }
+static inline bool wait_rising_edge(int sck_pin, uint32_t timeout_us) {
 // Expect current low, wait for high.
 return wait_level(sck_pin, 1, timeout_us);
 }
@@ -194,7 +195,7 @@ static void analyze_headers(const uint8_t *buf, int n) {
 // ----------------------------
 
 
-static inline bool wait_rising_edge(int sck_pin, uint32_t timeout_us) {
+
 // Detect a new frame boundary:
 // Require SCK to stay high continuously for FRAME_GAP_US .
 // New helper: wait for "no edges" gap on SCK, then first falling edge
