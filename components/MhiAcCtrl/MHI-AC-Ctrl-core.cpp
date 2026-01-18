@@ -75,7 +75,8 @@ static constexpr uint32_t FRAME_GAP_US  = 20; // quiet time indicating frame bou
 
 // Edge timeouts:
 // Allow generous margins but still "microsecond scale" so you don't drift into next bytes/frames.
-static constexpr uint32_t EDGE_TIMEOUT_US = 2000;   // max time waiting for a single edge
+static constexpr uint32_t EDGE_TIMEOUT_US  = 50;       // within a burst
+static constexpr uint32_t BURST_WAIT_US    = 200000;   // wait up to 200ms for activity
 static constexpr uint32_t SYNC_TIMEOUT_US = 80000;     // initial sync up to 80ms
 static constexpr uint32_t FRAME_TIMEOUT_US = 50000; // total time allowed to receive a frame (~10ms active + pauses)
 
@@ -137,15 +138,37 @@ static bool capture_mosi_bytes(
     uint8_t *out, int nbytes, uint32_t max_us) {
 
   const uint32_t t0 = micros();
+
   for (int i = 0; i < nbytes; i++) {
     uint8_t b = 0;
+
     for (int bit = 0; bit < 8; bit++) {
+
+      // IMPORTANT:
+      // - The first bit of a byte may happen after a long pause between bursts/bytes.
+      // - So allow BURST_WAIT_US for the first falling edge of each byte.
+      // - Within the byte, edges should come quickly, so use EDGE_TIMEOUT_US.
+
+      const uint32_t fall_to = (bit == 0) ? BURST_WAIT_US : EDGE_TIMEOUT_US;
+
       // wait falling
-      if (!wait_falling_edge(sck_pin, EDGE_TIMEOUT_US)) return false;
+      if (!wait_falling_edge(sck_pin, fall_to)) {
+        if (MHI_DEBUG && dbg_ok()) {
+          ESP_LOGW(TAG_CORE, "capture: FALL timeout at byte=%d bit=%d (to=%u us) SCK=%d MOSI=%d",
+                   i, bit, (unsigned)fall_to, pin_read(sck_pin), pin_read(mosi_pin));
+        }
+        return false;
+      }
       int mosi_fall = pin_read(mosi_pin);
 
-      // wait rising
-      if (!wait_rising_edge(sck_pin, EDGE_TIMEOUT_US)) return false;
+      // wait rising (should be quick once clock is active)
+      if (!wait_rising_edge(sck_pin, EDGE_TIMEOUT_US)) {
+        if (MHI_DEBUG && dbg_ok()) {
+          ESP_LOGW(TAG_CORE, "capture: RISE timeout at byte=%d bit=%d SCK=%d MOSI=%d",
+                   i, bit, pin_read(sck_pin), pin_read(mosi_pin));
+        }
+        return false;
+      }
       int mosi_rise = pin_read(mosi_pin);
 
       int sample = sample_on_rising ? mosi_rise : mosi_fall;
@@ -156,10 +179,17 @@ static bool capture_mosi_bytes(
         if (sample) b |= (1u << (7 - bit));
       }
 
-      if ((uint32_t)(micros() - t0) > max_us) return false;
+      if ((uint32_t)(micros() - t0) > max_us) {
+        if (MHI_DEBUG && dbg_ok()) {
+          ESP_LOGW(TAG_CORE, "capture: MAX time exceeded (%u us)", (unsigned)max_us);
+        }
+        return false;
+      }
     }
+
     out[i] = b;
   }
+
   return true;
 }
 
