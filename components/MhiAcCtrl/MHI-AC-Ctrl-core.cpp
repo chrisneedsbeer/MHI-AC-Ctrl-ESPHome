@@ -128,43 +128,55 @@ static inline bool wait_rising_edge(int sck_pin, uint32_t timeout_us) {
 // Detect a new frame boundary:
 // Require SCK to stay high continuously for FRAME_GAP_US .
 // New helper: wait for "no edges" gap on SCK, then first falling edge
-static bool wait_frame_start(int sck_pin, uint32_t max_wait_us) {
-  const uint32_t t_start = micros();
-  uint32_t best_hi_us = 0;
-  uint32_t tries = 0;
+static bool wait_frame_start(int sck_pin, int mosi_pin, uint32_t max_wait_us) {
+  const uint32_t t0 = micros();
 
-  while ((uint32_t)(micros() - t_start) < max_wait_us) {
-    tries++;
+  // sliding window of last 3 bytes seen on MOSI
+  uint8_t w0 = 0, w1 = 0, w2 = 0;
 
-    // Wait until high appears
-    if (!wait_level(sck_pin, 1, EDGE_TIMEOUT_US)) {
+  // helper: read one MOSI byte (Mode3, LSB-first) while ignoring MISO
+  auto read_mosi_byte = [&](uint8_t &out) -> bool {
+    uint8_t b = 0;
+    uint8_t mask = 1;
+
+    for (int bit = 0; bit < 8; bit++) {
+      // wait falling (enter low phase)
+      if (!wait_falling_edge(sck_pin, EDGE_TIMEOUT_US)) return false;
+      // wait rising (sample MOSI on rising for CPHA=1 with CPOL=1)
+      if (!wait_rising_edge(sck_pin, EDGE_TIMEOUT_US)) return false;
+
+      if (pin_read(mosi_pin)) b |= mask;
+      mask <<= 1;
+    }
+    out = b;
+    return true;
+  };
+
+  while ((uint32_t)(micros() - t0) < max_wait_us) {
+    uint8_t b;
+    if (!read_mosi_byte(b)) {
+      // If clock paused, keep looping until max_wait_us.
       continue;
     }
 
-    // Measure continuous-high duration
-    const uint32_t t_hi = micros();
-    while (pin_read(sck_pin) == 1) {
-      uint32_t hi_us = (uint32_t)(micros() - t_hi);
-      if (hi_us > best_hi_us) best_hi_us = hi_us;
+    // slide window
+    w0 = w1; w1 = w2; w2 = b;
 
-      if (hi_us >= FRAME_GAP_US ) {
-        if (MHI_DEBUG && dbg_ok()) {
-          ESP_LOGI(TAG_CORE, "frame_start: found idle-high gap %u us (need %u us), tries=%u",
-                   hi_us, FRAME_GAP_US , tries);
-        }
-        return true;
+    // Check signature: 6C/6D 80 04
+    if ((w0 == 0x6C || w0 == 0x6D) && w1 == 0x80 && w2 == 0x04) {
+      if (MHI_DEBUG && dbg_ok()) {
+        ESP_LOGI(TAG_CORE, "frame_start(sig): aligned on %02X %02X %02X", w0, w1, w2);
       }
-      if ((uint32_t)(micros() - t_start) >= max_wait_us)
-        break;
+      return true; // next byte read will be DB0
     }
   }
 
   if (MHI_DEBUG && dbg_ok()) {
-    ESP_LOGW(TAG_CORE, "frame_start: TIMEOUT. best_hi_us=%u (need %u), SCK=%d tries=%u",
-             best_hi_us, FRAME_GAP_US , pin_read(sck_pin), tries);
+    ESP_LOGW(TAG_CORE, "frame_start(sig): TIMEOUT waiting for signature");
   }
   return false;
 }
+
 
 
 // ----------------------------
@@ -185,7 +197,7 @@ static bool spi_transfer_frame_mode3_lsb(
   //   }
   //   return false;
   // }
-  if (!wait_falling_edge(sck_pin, SYNC_TIMEOUT_US)) { dbg_xfer_fail("INIT FALL timeout", sck_pin, mosi_pin, -1, -1); return false; }
+
 
   for (uint8_t byte_cnt = 0; byte_cnt < frame_len_bytes; byte_cnt++) {
     uint8_t in_byte = 0;
@@ -364,9 +376,10 @@ int MHI_AC_Ctrl_Core::loop(uint max_time_ms) {
   // Do NOT wait in ms per bit; wait for the frame gap.
   // ----------------------------
   const uint32_t max_wait_us = (uint32_t) max_time_ms * 1000UL;
-  if (!wait_frame_start(SCK_PIN, max_wait_us)) {
-    return err_msg_timeout_SCK_high;  // "no proper idle-high gap observed"
+  if (!wait_frame_start(SCK_PIN, MOSI_PIN, max_wait_us)) {
+    return err_msg_timeout_SCK_high;
   }
+
 
   // ----------------------------
   // Build next MISO frame according to spec:
