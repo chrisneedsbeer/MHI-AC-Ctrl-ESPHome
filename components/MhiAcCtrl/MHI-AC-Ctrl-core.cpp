@@ -13,6 +13,9 @@
 
 #include "driver/gpio.h"
 #include "esp_rom_sys.h"  // esp_rom_delay_us
+#include "soc/gpio_struct.h"
+#include "soc/gpio_reg.h"
+
 
 namespace esphome {
 namespace mhi {
@@ -34,14 +37,32 @@ static inline bool dbg_ok() {
 #define DBG_LOGI(...) do { if (MHI_DEBUG && dbg_ok()) ESP_LOGI(TAG_CORE, __VA_ARGS__); } while(0)
 #define DBG_LOGW(...) do { if (MHI_DEBUG && dbg_ok()) ESP_LOGW(TAG_CORE, __VA_ARGS__); } while(0)
 
+static inline void dbg_xfer_fail(const char *msg, int sck_pin, int mosi_pin,
+                                int byte_cnt, int bit_cnt) {
+  static uint32_t last = 0;
+  uint32_t now = millis();
+  if (now - last < 250) return; // at most 4/sec
+  last = now;
+  ESP_LOGW(TAG_CORE, "xfer_fail: %s at byte=%d bit=%d SCK=%d MOSI=%d",
+           msg, byte_cnt, bit_cnt, pin_read(sck_pin), pin_read(mosi_pin));
+}
+
+
 // ----------------------------
 // GPIO fast helpers
 // ----------------------------
 static inline int pin_read(int pin) {
-  return gpio_get_level((gpio_num_t) pin);
+  if (pin < 32) return (GPIO.in >> pin) & 1;
+  return (GPIO.in1.data >> (pin - 32)) & 1;
 }
 static inline void pin_write(int pin, int level) {
-  gpio_set_level((gpio_num_t) pin, level);
+  if (pin < 32) {
+    if (level) GPIO.out_w1ts = (1UL << pin);
+    else       GPIO.out_w1tc = (1UL << pin);
+  } else {
+    if (level) GPIO.out1_w1ts.data = (1UL << (pin - 32));
+    else       GPIO.out1_w1tc.data = (1UL << (pin - 32));
+  }
 }
 
 
@@ -55,6 +76,7 @@ static constexpr uint32_t FRAME_GAP_US  = 20; // quiet time indicating frame bou
 // Edge timeouts:
 // Allow generous margins but still "microsecond scale" so you don't drift into next bytes/frames.
 static constexpr uint32_t EDGE_TIMEOUT_US = 2000;   // max time waiting for a single edge
+static constexpr uint32_t SYNC_TIMEOUT_US = 80000;     // initial sync up to 80ms
 static constexpr uint32_t FRAME_TIMEOUT_US = 50000; // total time allowed to receive a frame (~10ms active + pauses)
 
 // Optional: small spin delay while waiting for edges (keeps CPU from 100% busy-waiting)
@@ -156,13 +178,14 @@ static bool spi_transfer_frame_mode3_lsb(
   const uint32_t t_frame0 = micros();
 
   // Sync to first falling edge
-  if (!wait_falling_edge(sck_pin, EDGE_TIMEOUT_US)) {
-    if (MHI_DEBUG && dbg_ok()) {
-      ESP_LOGW(TAG_CORE, "xfer: timeout waiting initial FALL. SCK=%d MOSI=%d",
-               pin_read(sck_pin), pin_read(mosi_pin));
-    }
-    return false;
-  }
+  // if (!wait_falling_edge(sck_pin, EDGE_TIMEOUT_US)) {
+  //   if (MHI_DEBUG && dbg_ok()) {
+  //     ESP_LOGW(TAG_CORE, "xfer: timeout waiting initial FALL. SCK=%d MOSI=%d",
+  //              pin_read(sck_pin), pin_read(mosi_pin));
+  //   }
+  //   return false;
+  // }
+  if (!wait_falling_edge(sck_pin, SYNC_TIMEOUT_US)) { dbg_xfer_fail("INIT FALL timeout", sck_pin, mosi_pin, -1, -1); return false; }
 
   for (uint8_t byte_cnt = 0; byte_cnt < frame_len_bytes; byte_cnt++) {
     uint8_t in_byte = 0;
@@ -174,36 +197,39 @@ static bool spi_transfer_frame_mode3_lsb(
       pin_write(miso_pin, (tx[byte_cnt] & mask) ? 1 : 0);
 
       // Wait for rising edge, then sample MOSI
-      if (!wait_rising_edge(sck_pin, EDGE_TIMEOUT_US)) {
-        if (MHI_DEBUG && dbg_ok()) {
-          ESP_LOGW(TAG_CORE, "xfer: timeout RISE at byte=%u bit=%u SCK=%d MOSI=%d",
-                   byte_cnt, bit_cnt, pin_read(sck_pin), pin_read(mosi_pin));
-        }
-        return false;
-      }
+      // if (!wait_rising_edge(sck_pin, EDGE_TIMEOUT_US)) {
+      //   if (MHI_DEBUG && dbg_ok()) {
+      //     ESP_LOGW(TAG_CORE, "xfer: timeout RISE at byte=%u bit=%u SCK=%d MOSI=%d",
+      //              byte_cnt, bit_cnt, pin_read(sck_pin), pin_read(mosi_pin));
+      //   }
+      //   return false;
+      // }
+      if (!wait_rising_edge(sck_pin, EDGE_TIMEOUT_US)) { dbg_xfer_fail("RISE timeout", sck_pin, mosi_pin, byte_cnt, bit_cnt); return false; }
       if (pin_read(mosi_pin)) in_byte |= mask;
 
       // Wait for falling edge to start next bit
-      if (!wait_falling_edge(sck_pin, EDGE_TIMEOUT_US)) {
-        if (MHI_DEBUG && dbg_ok()) {
-          ESP_LOGW(TAG_CORE, "xfer: timeout FALL at byte=%u bit=%u SCK=%d MOSI=%d",
-                   byte_cnt, bit_cnt, pin_read(sck_pin), pin_read(mosi_pin));
-        }
-        return false;
-      }
+      // if (!wait_falling_edge(sck_pin, EDGE_TIMEOUT_US)) {
+      //   if (MHI_DEBUG && dbg_ok()) {
+      //     ESP_LOGW(TAG_CORE, "xfer: timeout FALL at byte=%u bit=%u SCK=%d MOSI=%d",
+      //              byte_cnt, bit_cnt, pin_read(sck_pin), pin_read(mosi_pin));
+      //   }
+      //   return false;
+      // }
+      if (!wait_falling_edge(sck_pin, EDGE_TIMEOUT_US)) { dbg_xfer_fail("FALL timeout", sck_pin, mosi_pin, byte_cnt, bit_cnt); return false; }
 
       mask <<= 1;
 
       // total frame timeout
-      if ((uint32_t)(micros() - t_frame0) > FRAME_TIMEOUT_US) {
-        if (MHI_DEBUG && dbg_ok()) {
-          ESP_LOGW(TAG_CORE, "xfer: frame timeout at byte=%u bit=%u elapsed_us=%u",
-                   byte_cnt, bit_cnt, (unsigned)(micros() - t_frame0));
-        }
-        return false;
-      }
+      // if ((uint32_t)(micros() - t_frame0) > FRAME_TIMEOUT_US) {
+      //   if (MHI_DEBUG && dbg_ok()) {
+      //     ESP_LOGW(TAG_CORE, "xfer: frame timeout at byte=%u bit=%u elapsed_us=%u",
+      //              byte_cnt, bit_cnt, (unsigned)(micros() - t_frame0));
+      //   }
+      //   return false;
+      // }
+      if ((uint32_t)(micros() - t_frame0) > FRAME_TIMEOUT_US) { dbg_xfer_fail("FRAME timeout", sck_pin, mosi_pin, byte_cnt, bit_cnt); return false; }
     }
-
+    
     rx[byte_cnt] = in_byte;
   }
 
