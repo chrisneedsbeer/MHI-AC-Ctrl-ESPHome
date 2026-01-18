@@ -425,7 +425,7 @@ int MHI_AC_Ctrl_Core::loop(uint max_time_ms) {
   // One-time dump for analysis
   static bool did_dump = false;
   if (!did_dump) {
-    did_dump = true;
+    //did_dump = true;
 
     static uint8_t cap[400];
 
