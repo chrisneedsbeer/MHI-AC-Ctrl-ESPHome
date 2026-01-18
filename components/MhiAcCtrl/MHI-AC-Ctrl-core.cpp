@@ -22,6 +22,25 @@ namespace mhi {
 
 static const char *TAG_CORE = "mhi.core";
 
+
+
+// ----------------------------
+// GPIO fast helpers
+// ----------------------------
+static inline int pin_read(int pin) {
+  if (pin < 32) return (GPIO.in >> pin) & 1;
+  return (GPIO.in1.data >> (pin - 32)) & 1;
+}
+static inline void pin_write(int pin, int level) {
+  if (pin < 32) {
+    if (level) GPIO.out_w1ts = (1UL << pin);
+    else       GPIO.out_w1tc = (1UL << pin);
+  } else {
+    if (level) GPIO.out1_w1ts.data = (1UL << (pin - 32));
+    else       GPIO.out1_w1tc.data = (1UL << (pin - 32));
+  }
+}
+
 // ----------------------------
 // Debug
 // ----------------------------
@@ -46,25 +65,6 @@ static inline void dbg_xfer_fail(const char *msg, int sck_pin, int mosi_pin,
   ESP_LOGW(TAG_CORE, "xfer_fail: %s at byte=%d bit=%d SCK=%d MOSI=%d",
            msg, byte_cnt, bit_cnt, pin_read(sck_pin), pin_read(mosi_pin));
 }
-
-
-// ----------------------------
-// GPIO fast helpers
-// ----------------------------
-static inline int pin_read(int pin) {
-  if (pin < 32) return (GPIO.in >> pin) & 1;
-  return (GPIO.in1.data >> (pin - 32)) & 1;
-}
-static inline void pin_write(int pin, int level) {
-  if (pin < 32) {
-    if (level) GPIO.out_w1ts = (1UL << pin);
-    else       GPIO.out_w1tc = (1UL << pin);
-  } else {
-    if (level) GPIO.out1_w1ts.data = (1UL << (pin - 32));
-    else       GPIO.out1_w1tc.data = (1UL << (pin - 32));
-  }
-}
-
 
 // ----------------------------
 // Timing (tuned for ~31us/bit, but tolerant)
