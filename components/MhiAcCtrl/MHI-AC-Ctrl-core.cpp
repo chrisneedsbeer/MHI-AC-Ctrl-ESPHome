@@ -33,8 +33,8 @@ static inline void pin_write(int pin, int level) {
 // Timing (tuned for ~31us/bit, but tolerant)
 // ----------------------------
 // Minimum "idle-high" time to consider a new frame boundary.
-// Spec examples show long gaps (tens of ms) between frames. Using 3-5ms is safe.
-static constexpr uint32_t FRAME_IDLE_US = 3000;
+// Spec examples show long gaps (tens of ms) between frames. 
+static constexpr uint32_t FRAME_IDLE_US = 1500; // quiet time indicating frame boundary (tune 800..5000)
 
 // Edge timeouts:
 // Allow generous margins but still "microsecond scale" so you don't drift into next bytes/frames.
@@ -89,30 +89,40 @@ static inline bool wait_rising_edge(int sck_pin, uint32_t timeout_us) {
 
 // Detect a new frame boundary:
 // Require SCK to stay high continuously for FRAME_IDLE_US.
+// New helper: wait for "no edges" gap on SCK, then first falling edge
 static bool wait_frame_start(int sck_pin, uint32_t max_wait_us) {
-  const uint32_t t_start = micros();
+  const uint32_t t0 = micros();
+  int last_level = pin_read(sck_pin);
+  uint32_t last_change = micros();
 
-  while ((uint32_t) (micros() - t_start) < max_wait_us) {
-    // Wait until high first
-    if (!wait_level(sck_pin, 1, EDGE_TIMEOUT_US)) {
-      continue;
-    }
+  while ((uint32_t)(micros() - t0) < max_wait_us) {
+    int lvl = pin_read(sck_pin);
 
-    // Measure continuous high duration
-    const uint32_t t_hi = micros();
-    while (pin_read(sck_pin) == 1) {
-      if ((uint32_t) (micros() - t_hi) >= FRAME_IDLE_US) {
-        // Now we are at "idle gap"; the next falling edge is the first bit edge of the new frame
-        return true;
+    if (lvl != last_level) {
+      last_level = lvl;
+      last_change = micros();
+    } else {
+      // Have we seen a "quiet" period long enough to mark the inter-frame gap?
+      if ((uint32_t)(micros() - last_change) >= FRAME_IDLE_US) {
+        // We are in a quiet region; next falling edge marks start of a frame/bitstream.
+        // Wait for it (but do not block forever).
+        const uint32_t remaining =
+            max_wait_us - (uint32_t)(micros() - t0);
+
+        // If already low, we still want the *next* falling edge, so first wait for high.
+        if (pin_read(sck_pin) == 0) {
+          // wait for high, then low
+          if (!wait_level(sck_pin, 1, remaining))
+            return false;
+        }
+        return wait_falling_edge(sck_pin, remaining);
       }
-      if ((uint32_t) (micros() - t_start) >= max_wait_us)
-        return false;
-      if (SPIN_DELAY_US)
-        esp_rom_delay_us(SPIN_DELAY_US);
     }
 
-    // If it went low before FRAME_IDLE_US elapsed, not a frame gap; keep searching
+    if (SPIN_DELAY_US)
+      esp_rom_delay_us(SPIN_DELAY_US);
   }
+
   return false;
 }
 
