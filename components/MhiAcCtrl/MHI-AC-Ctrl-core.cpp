@@ -114,6 +114,76 @@ static inline bool wait_level(int pin, int desired_level, uint32_t timeout_us) {
   return false;
 }
 
+
+// ----------------------------
+// Capture MOSI bytes helper (unused in final code, but kept for reference)
+// ----------------------------
+static bool capture_mosi_bytes(
+    int sck_pin, int mosi_pin,
+    bool lsb_first, bool sample_on_rising,
+    uint8_t *out, int nbytes, uint32_t max_us) {
+
+  const uint32_t t0 = micros();
+  for (int i = 0; i < nbytes; i++) {
+    uint8_t b = 0;
+    for (int bit = 0; bit < 8; bit++) {
+      // wait falling
+      if (!wait_falling_edge(sck_pin, EDGE_TIMEOUT_US)) return false;
+      int mosi_fall = pin_read(mosi_pin);
+
+      // wait rising
+      if (!wait_rising_edge(sck_pin, EDGE_TIMEOUT_US)) return false;
+      int mosi_rise = pin_read(mosi_pin);
+
+      int sample = sample_on_rising ? mosi_rise : mosi_fall;
+
+      if (lsb_first) {
+        if (sample) b |= (1u << bit);
+      } else {
+        if (sample) b |= (1u << (7 - bit));
+      }
+
+      if ((uint32_t)(micros() - t0) > max_us) return false;
+    }
+    out[i] = b;
+  }
+  return true;
+}
+
+static void analyze_headers(const uint8_t *buf, int n) {
+  // Find most frequent 2-byte and 3-byte sequences in buf
+  uint32_t best2_cnt = 0, best3_cnt = 0;
+  int best2_i = 0, best3_i = 0;
+
+  for (int i = 0; i < n - 1; i++) {
+    uint32_t cnt2 = 0;
+    for (int j = 0; j < n - 1; j++) {
+      if (buf[j] == buf[i] && buf[j+1] == buf[i+1]) cnt2++;
+    }
+    if (cnt2 > best2_cnt) { best2_cnt = cnt2; best2_i = i; }
+  }
+
+  for (int i = 0; i < n - 2; i++) {
+    uint32_t cnt3 = 0;
+    for (int j = 0; j < n - 2; j++) {
+      if (buf[j] == buf[i] && buf[j+1] == buf[i+1] && buf[j+2] == buf[i+2]) cnt3++;
+    }
+    if (cnt3 > best3_cnt) { best3_cnt = cnt3; best3_i = i; }
+  }
+
+  ESP_LOGI(TAG_CORE, "Header guess 2B: %02X %02X  count=%u",
+           buf[best2_i], buf[best2_i+1], (unsigned)best2_cnt);
+  ESP_LOGI(TAG_CORE, "Header guess 3B: %02X %02X %02X  count=%u",
+           buf[best3_i], buf[best3_i+1], buf[best3_i+2], (unsigned)best3_cnt);
+}
+
+// ----------------------------
+// end of testing block
+// ----------------------------
+
+
+
+
 // Wait for an edge:
 // For Mode 3, clock idles high; each bit begins with falling edge then rising edge.
 static inline bool wait_falling_edge(int sck_pin, uint32_t timeout_us) {
@@ -350,6 +420,40 @@ int MHI_AC_Ctrl_Core::loop(uint max_time_ms) {
   static unsigned long lastTroomInternalMillis = 0;
 
   call_counter++;
+
+  // One-time dump for analysis
+  static bool did_dump = false;
+  if (!did_dump) {
+    did_dump = true;
+
+    static uint8_t cap[400];
+
+    // Start with your current assumption (LSB + sample rising).
+    bool ok = capture_mosi_bytes(SCK_PIN, MOSI_PIN,
+                                true /*lsb_first*/, true /*sample_on_rising*/,
+                                cap, (int)sizeof(cap), 300000 /*300ms*/);
+
+    if (!ok) {
+      ESP_LOGW(TAG_CORE, "capture_mosi_bytes failed");
+      return err_msg_timeout_SCK_high;
+    }
+
+    // Print first 64 bytes
+    char line[3*64 + 1];
+    line[0] = 0;
+    for (int i = 0; i < 64; i++) {
+      char tmp[4];
+      snprintf(tmp, sizeof(tmp), "%02X ", cap[i]);
+      strncat(line, tmp, sizeof(line)-strlen(line)-1);
+    }
+    ESP_LOGI(TAG_CORE, "MOSI first 64 bytes: %s", line);
+
+    analyze_headers(cap, (int)sizeof(cap));
+    return 0;
+  }
+  // ---------------------------- 
+
+
 
   // 20-byte MOSI frame buffer (supports up to 33 if you use WF-RAC)
   static byte MOSI_frame[33];
