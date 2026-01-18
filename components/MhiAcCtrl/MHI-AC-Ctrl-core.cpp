@@ -115,6 +115,18 @@ static inline bool wait_level(int pin, int desired_level, uint32_t timeout_us) {
 }
 
 
+
+// Wait for an edge:
+// For Mode 3, clock idles high; each bit begins with falling edge then rising edge.
+static inline bool wait_falling_edge(int sck_pin, uint32_t timeout_us) {
+  // Expect current high, wait for low.
+  return wait_level(sck_pin, 0, timeout_us);
+}
+// Expect current low, wait for high.
+return wait_level(sck_pin, 1, timeout_us);
+}
+
+
 // ----------------------------
 // Capture MOSI bytes helper (unused in final code, but kept for reference)
 // ----------------------------
@@ -182,19 +194,7 @@ static void analyze_headers(const uint8_t *buf, int n) {
 // ----------------------------
 
 
-
-
-// Wait for an edge:
-// For Mode 3, clock idles high; each bit begins with falling edge then rising edge.
-static inline bool wait_falling_edge(int sck_pin, uint32_t timeout_us) {
-  // Expect current high, wait for low.
-  return wait_level(sck_pin, 0, timeout_us);
-}
 static inline bool wait_rising_edge(int sck_pin, uint32_t timeout_us) {
-  // Expect current low, wait for high.
-  return wait_level(sck_pin, 1, timeout_us);
-}
-
 // Detect a new frame boundary:
 // Require SCK to stay high continuously for FRAME_GAP_US .
 // New helper: wait for "no edges" gap on SCK, then first falling edge
@@ -430,7 +430,7 @@ int MHI_AC_Ctrl_Core::loop(uint max_time_ms) {
 
     // Start with your current assumption (LSB + sample rising).
     bool ok = capture_mosi_bytes(SCK_PIN, MOSI_PIN,
-                                true /*lsb_first*/, true /*sample_on_rising*/,
+                                true /*lsb_first*/, false /*sample_on_falling*/,
                                 cap, (int)sizeof(cap), 300000 /*300ms*/);
 
     if (!ok) {
