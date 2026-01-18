@@ -431,7 +431,7 @@ int MHI_AC_Ctrl_Core::loop(uint max_time_ms) {
 
     // Start with your current assumption (LSB + sample rising).
     bool ok = capture_mosi_bytes(SCK_PIN, MOSI_PIN,
-                                true /*lsb_first*/, false /*sample_on_falling*/,
+                                true /*lsb_first*/, true /*sample_on_falling*/,
                                 cap, (int)sizeof(cap), 300000 /*300ms*/);
 
     if (!ok) {
