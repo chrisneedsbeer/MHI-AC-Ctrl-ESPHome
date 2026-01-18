@@ -20,6 +20,21 @@ namespace mhi {
 static const char *TAG_CORE = "mhi.core";
 
 // ----------------------------
+// Debug
+// ----------------------------
+static constexpr bool MHI_DEBUG = true;   // set false to silence
+static constexpr uint32_t DBG_RATE_MS = 2000; // print at most every 2s
+
+static inline bool dbg_ok() {
+  static uint32_t last = 0;
+  uint32_t now = millis();
+  if (now - last >= DBG_RATE_MS) { last = now; return true; }
+  return false;
+}
+#define DBG_LOGI(...) do { if (MHI_DEBUG && dbg_ok()) ESP_LOGI(TAG_CORE, __VA_ARGS__); } while(0)
+#define DBG_LOGW(...) do { if (MHI_DEBUG && dbg_ok()) ESP_LOGW(TAG_CORE, __VA_ARGS__); } while(0)
+
+// ----------------------------
 // GPIO fast helpers
 // ----------------------------
 static inline int pin_read(int pin) {
@@ -29,20 +44,21 @@ static inline void pin_write(int pin, int level) {
   gpio_set_level((gpio_num_t) pin, level);
 }
 
+
 // ----------------------------
 // Timing (tuned for ~31us/bit, but tolerant)
 // ----------------------------
 // Minimum "idle-high" time to consider a new frame boundary.
 // Spec examples show long gaps (tens of ms) between frames. 
-static constexpr uint32_t FRAME_IDLE_US = 1500; // quiet time indicating frame boundary (tune 800..5000)
+static constexpr uint32_t FRAME_GAP_US  = 20; // quiet time indicating frame boundary (tune 800..5000)
 
 // Edge timeouts:
 // Allow generous margins but still "microsecond scale" so you don't drift into next bytes/frames.
-static constexpr uint32_t EDGE_TIMEOUT_US = 3000;   // max time waiting for a single edge
-static constexpr uint32_t FRAME_TIMEOUT_US = 30000; // total time allowed to receive a frame (~10ms active + pauses)
+static constexpr uint32_t EDGE_TIMEOUT_US = 2000;   // max time waiting for a single edge
+static constexpr uint32_t FRAME_TIMEOUT_US = 50000; // total time allowed to receive a frame (~10ms active + pauses)
 
 // Optional: small spin delay while waiting for edges (keeps CPU from 100% busy-waiting)
-static constexpr uint32_t SPIN_DELAY_US = 1;
+static constexpr uint32_t SPIN_DELAY_US = 0;
 
 // ----------------------------
 // Checksums
@@ -88,43 +104,46 @@ static inline bool wait_rising_edge(int sck_pin, uint32_t timeout_us) {
 }
 
 // Detect a new frame boundary:
-// Require SCK to stay high continuously for FRAME_IDLE_US.
+// Require SCK to stay high continuously for FRAME_GAP_US .
 // New helper: wait for "no edges" gap on SCK, then first falling edge
 static bool wait_frame_start(int sck_pin, uint32_t max_wait_us) {
-  const uint32_t t0 = micros();
-  int last_level = pin_read(sck_pin);
-  uint32_t last_change = micros();
+  const uint32_t t_start = micros();
+  uint32_t best_hi_us = 0;
+  uint32_t tries = 0;
 
-  while ((uint32_t)(micros() - t0) < max_wait_us) {
-    int lvl = pin_read(sck_pin);
+  while ((uint32_t)(micros() - t_start) < max_wait_us) {
+    tries++;
 
-    if (lvl != last_level) {
-      last_level = lvl;
-      last_change = micros();
-    } else {
-      // Have we seen a "quiet" period long enough to mark the inter-frame gap?
-      if ((uint32_t)(micros() - last_change) >= FRAME_IDLE_US) {
-        // We are in a quiet region; next falling edge marks start of a frame/bitstream.
-        // Wait for it (but do not block forever).
-        const uint32_t remaining =
-            max_wait_us - (uint32_t)(micros() - t0);
-
-        // If already low, we still want the *next* falling edge, so first wait for high.
-        if (pin_read(sck_pin) == 0) {
-          // wait for high, then low
-          if (!wait_level(sck_pin, 1, remaining))
-            return false;
-        }
-        return wait_falling_edge(sck_pin, remaining);
-      }
+    // Wait until high appears
+    if (!wait_level(sck_pin, 1, EDGE_TIMEOUT_US)) {
+      continue;
     }
 
-    if (SPIN_DELAY_US)
-      esp_rom_delay_us(SPIN_DELAY_US);
+    // Measure continuous-high duration
+    const uint32_t t_hi = micros();
+    while (pin_read(sck_pin) == 1) {
+      uint32_t hi_us = (uint32_t)(micros() - t_hi);
+      if (hi_us > best_hi_us) best_hi_us = hi_us;
+
+      if (hi_us >= FRAME_GAP_US ) {
+        if (MHI_DEBUG && dbg_ok()) {
+          ESP_LOGI(TAG_CORE, "frame_start: found idle-high gap %u us (need %u us), tries=%u",
+                   hi_us, FRAME_GAP_US , tries);
+        }
+        return true;
+      }
+      if ((uint32_t)(micros() - t_start) >= max_wait_us)
+        break;
+    }
   }
 
+  if (MHI_DEBUG && dbg_ok()) {
+    ESP_LOGW(TAG_CORE, "frame_start: TIMEOUT. best_hi_us=%u (need %u), SCK=%d tries=%u",
+             best_hi_us, FRAME_GAP_US , pin_read(sck_pin), tries);
+  }
   return false;
 }
+
 
 // ----------------------------
 // Bit-banged SPI transfer: Mode 3, LSB-first, edge-driven
@@ -136,9 +155,14 @@ static bool spi_transfer_frame_mode3_lsb(
 
   const uint32_t t_frame0 = micros();
 
-  // Sync: we expect we are currently in "idle gap", but to be safe we sync to the first falling edge
-  if (!wait_falling_edge(sck_pin, EDGE_TIMEOUT_US))
+  // Sync to first falling edge
+  if (!wait_falling_edge(sck_pin, EDGE_TIMEOUT_US)) {
+    if (MHI_DEBUG && dbg_ok()) {
+      ESP_LOGW(TAG_CORE, "xfer: timeout waiting initial FALL. SCK=%d MOSI=%d",
+               pin_read(sck_pin), pin_read(mosi_pin));
+    }
     return false;
+  }
 
   for (uint8_t byte_cnt = 0; byte_cnt < frame_len_bytes; byte_cnt++) {
     uint8_t in_byte = 0;
@@ -146,35 +170,47 @@ static bool spi_transfer_frame_mode3_lsb(
 
     for (uint8_t bit_cnt = 0; bit_cnt < 8; bit_cnt++) {
 
-      // At start of each bit we should already be at SCK low (falling edge occurred).
-      // Drive MISO while SCK is low (data changes on falling edge for Mode 3).
+      // Drive MISO while SCK low
       pin_write(miso_pin, (tx[byte_cnt] & mask) ? 1 : 0);
 
-      // Sample MOSI on rising edge (CPHA=1 => trailing edge sample; with CPOL=1 that is rising)
-      if (!wait_rising_edge(sck_pin, EDGE_TIMEOUT_US))
+      // Wait for rising edge, then sample MOSI
+      if (!wait_rising_edge(sck_pin, EDGE_TIMEOUT_US)) {
+        if (MHI_DEBUG && dbg_ok()) {
+          ESP_LOGW(TAG_CORE, "xfer: timeout RISE at byte=%u bit=%u SCK=%d MOSI=%d",
+                   byte_cnt, bit_cnt, pin_read(sck_pin), pin_read(mosi_pin));
+        }
         return false;
+      }
+      if (pin_read(mosi_pin)) in_byte |= mask;
 
-      if (pin_read(mosi_pin))
-        in_byte |= mask;
-
-      // Next bit begins at next falling edge
-      if (!wait_falling_edge(sck_pin, EDGE_TIMEOUT_US))
+      // Wait for falling edge to start next bit
+      if (!wait_falling_edge(sck_pin, EDGE_TIMEOUT_US)) {
+        if (MHI_DEBUG && dbg_ok()) {
+          ESP_LOGW(TAG_CORE, "xfer: timeout FALL at byte=%u bit=%u SCK=%d MOSI=%d",
+                   byte_cnt, bit_cnt, pin_read(sck_pin), pin_read(mosi_pin));
+        }
         return false;
+      }
 
       mask <<= 1;
 
-      // Frame safety timeout
-      if ((uint32_t) (micros() - t_frame0) > FRAME_TIMEOUT_US)
+      // total frame timeout
+      if ((uint32_t)(micros() - t_frame0) > FRAME_TIMEOUT_US) {
+        if (MHI_DEBUG && dbg_ok()) {
+          ESP_LOGW(TAG_CORE, "xfer: frame timeout at byte=%u bit=%u elapsed_us=%u",
+                   byte_cnt, bit_cnt, (unsigned)(micros() - t_frame0));
+        }
         return false;
+      }
     }
 
     rx[byte_cnt] = in_byte;
   }
 
-  // Leave MISO low when done (optional, helps avoid odd bus bias)
   pin_write(miso_pin, 0);
   return true;
 }
+
 
 // ------------------------------------------------------------------
 // Existing code (state)
@@ -415,7 +451,7 @@ int MHI_AC_Ctrl_Core::loop(uint max_time_ms) {
   if (!ok) {
     // Allow WiFi/RTOS after a failed attempt (we are between frames now)
     delay(0);
-    return err_msg_timeout_SCK_low;
+    return err_msg_timeout_SCK_high; // or define a distinct err for "xfer failed"
   }
 
   // After transfer, we are between frames; safe to yield
